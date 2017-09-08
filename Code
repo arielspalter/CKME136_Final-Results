@@ -108,8 +108,7 @@ ValidationSet.Norm$salary.num <- factor(ifelse(ValidationSet$salary==" >50K",'X.
 # the formula interface for the machine
 f = as.formula(salary.num ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male)
 
-
-
+## SECTION 1, MANUAL CROSS-VALIDATION
 
 ###SVM
 
@@ -400,3 +399,190 @@ rfBest.df <- data.frame(prob=rfBest$X.0,obs=TestSet$salary.num,Method= 'RF / auc
 bestAll <- rbind(CARTBest.df, svmBest.df, GLMBest.df, rfBest.df, KnnBest.df)
 bestPlot <- ggplot(data = bestAll, aes(d=obs, m= 1-prob, color=Method))
 bestPlot + geom_roc()+geom_abline(aes(intercept=0,slope=1),linetype='dashed')+theme_minimal()+guides(color=guide_legend(keywidth=0.3,keyheight=0.6, default.unit="inch"))+theme(legend.text = element_text(size = 16),legend.title = element_text(size = 18))
+
+## SECTION 2 10-FOLD CROSS VALIDATION ACCURACY & KAPPA METRICS
+
+# setting up a grid with all possible K's from 1 to 20 for Knn algorithm to iterate and find the best tune.
+tunegrid <- expand.grid(.k=1:20)
+
+set.seed(7)
+mod.knn <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="knn",tuneGrid=tunegrid,preProcess=c("center","scale"),trControl=control,metric="Accuracy")
+set.seed
+mod.glm <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="glm",trControl=control,metric="Accuracy")
+set.seed(7)
+mod.cart <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="ctree",trControl=control,metric="Accuracy")
+set.seed(7)
+mod.svm <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="svmRadial",trControl=control,metric="Accuracy")
+set.seed(7)
+mod.rf <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="rf",trControl=control,metric="Accuracy")
+
+# Summary of the models:
+getTrainPerf(mod.knn)
+getTrainPerf(mod.glm)
+getTrainPerf(mod.cart)
+getTrainPerf(mod.svm)
+getTrainPerf(mod.rf)
+
+#plot and choose number of K Neighbours:
+set.seed(7)
+plot(mod.knn)
+mod.knn$bestTune #best K value is 19
+
+set.seed(7)
+KNN_Predict <- predict(mod.knn, testing[-14])
+CrossTable(KNN_Predict,testing$salary,prop.chisq = F,format = 'SPSS')
+
+set.seed(7)
+GLM_Predict <- predict(mod.glm, testing[-14])
+CrossTable(GLM_Predict,testing$salary,prop.chisq = F,format = 'SPSS')
+
+set.seed(7)
+CART_Predict <- predict(mod.cart, testing[-14])
+CrossTable(CART_Predict,testing$salary,prop.chisq = F,format = 'SPSS')
+testing$Cart <-  as.numeric(predict(mod.cart, testing))        
+
+set.seed(7)
+results <- resamples(list(KNN=mod.knn,LOGIT=mod.glm,CART=mod.cart,SVM=mod.svm,RF=mod.rf))
+summary()
+bwplot(results)
+densityplot(results)
+dotplot(results)
+
+#Checking the importance of features on the overall accuracy of the models:
+varImp(mod.knn)
+varImp(mod.glm)
+varImp(mod.svm)
+varImp(mod.rf)
+varImp(mod.cart)
+
+resultsData <- data.frame(KNN=results$values[,2],LOGIT=results$values[,4],CART = results$values[,6],SVM=results$values[,8],RF=results$values[,10])
+resultsDataStacked <- stack(resultsData)
+colnames(resultsDataStacked) <- c("Values","Method")
+p <- ggplot(aes(Values),data = resultsDataStacked)
+p+geom_density(aes(fill=Method),alpha=0.9)+xlab("Accuracy")+ylab("Density")
+qplot(x='',y=Values,data = resultsDataStacked,geom = 'boxplot',facets = . ~ Method,fill=Method,xlab = '',ylab = 'Accuracy')+geom_hline(aes(yintercept=mean(Values),color=''),data = resultsDataStacked,linetype='dashed',size=1.6)+scale_color_manual(name='Accuracy\n Mean of All Models',values = 'black')+theme(legend.title = element_text(size = 16))+guides(fill=guide_legend(keywidth = 0.4,keyheight = 0.4,default.unit = 'inch'))+theme(legend.text = element_text(size = 17))+scale_fill_manual(values = c('#886C96','#4F5668','#89023E','#EA638C','#FFD9DA'))+theme_light()
+write.csv(resultsData,file = 'Accuracy_NoNorm.csv')
+
+##Kappa:
+resultsKappa <- data.frame(KNN=results$values[,3],LOGIT=results$values[,5],CART=results$values[,7],SVM=results$values[,9],RF=results$values[,11])
+resultsKappaStacked <- stack(resultsKappa)
+colnames(resultsKappaStacked) <- c('Value','Method')
+qplot(x='',y=Value,geom = 'boxplot',data = resultsKappaStacked,facets = .~ Method,fill=Method,ylab = 'Kappa',xlab = '')+geom_hline(aes(yintercept=mean(Value),color=''),data = resultsKappaStacked,linetype='dashed',size=1.6)+scale_color_manual(name='Kappa\n Mean of All Models. ',values = 'black')+theme(legend.title = element_text(size = 16))+guides(fill=guide_legend(keywidth = 0.4,keyheight = 0.4,default.unit = 'inch'))+theme(legend.text = element_text(size = 17))+scale_fill_manual(values = c('#886C96','#4F5668','#89023E','#EA638C','#FFD9DA'))+theme_light()
+write.csv(results$values,file = 'Accuracy_Kappa_NoNorm.csv')
+
+## SECTION 3 10 FOLDS CROSS-VALIDATION AUC METRIC
+
+control <- trainControl(method = "cv",repeats = 10,classProbs = T, summaryFunction = twoClassSummary,savePredictions = T)
+metric <- "ROC"
+
+
+set.seed(7)
+modROC.knn <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="knn",preProcess=c("center","scale"),trControl=control,metric=metric)
+set.seed(7)
+modROC.glm <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="glm",trControl=control,metric=metric)
+set.seed(7)
+modROC.cart <- train(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,method="ctree",trControl=control,metric=metric)
+
+
+##plot.roc
+par(mfrow=c(1,3))
+plot.roc(roc(predictor=modROC.cart$pred$X...50K,response = modROC.cart$pred$obs),col='red',main="CART",ylim = c(0,1))
+plot.roc(roc(predictor=modROC.knn$pred$X...50K,response = modROC.knn$pred$obs),col='blue',main="Knn",ylim = c(0,1))
+plot.roc(roc(predictor=modROC.glm$pred$X...50K,response = modROC.glm$pred$obs),col='green',main="GLM",ylim = c(0,1))
+
+#same plot with ggplot:
+glm <- data.frame(D=modROC.glm$pred$obs, M = 1-(modROC.glm$pred$X...50K),METHOD='GLM')
+knn <- data.frame(D=modROC.knn$pred$obs, M = 1-(modROC.knn$pred$X...50K),METHOD='KNN')
+cart <- data.frame(D=modROC.cart$pred$obs, M = 1-(modROC.cart$pred$X...50K),METHOD='CART')
+AllThree <- rbind(cart,knn,glm)
+AllThreeCurves <- ggplot(data = AllThree,aes(m=M,d=D))
+AllThreeCurves+geom_roc(aes(color=METHOD)) + geom_abline(intercept = 0, slope = 1,linetype="dashed")
+resultsROC <- resamples(list(KNN=modROC.knn,LOGIT=modROC.glm,CART=modROC.cart))
+summary(resultsROC)
+resultsROC$values
+resultsROCData <- data.frame(KNN = resultsROC$values[,2], LOGIT = resultsROC$values[,5], CART = resultsROC$values[,8])
+resultsROCStacked <- stack(resultsROCData)
+colnames(resultsROCStacked) <- c('Values','Method')
+pp <- ggplot(aes(x=Values),data = resultsROCStacked)
+pp+geom_density(aes(fill=Method),alpha=0.9)+xlab("AUROC Accuracy")+ylab('Density')
+qplot(x='',y=Values,data = resultsROCStacked,geom = 'boxplot',facets = . ~ Method,fill=Method,xlab = '',ylab = 'AUROC Accuracy')
+
+## SECTION 4 ENSEMBLES METHODS AND FINAL RESULTS
+
+set.seed(7)
+algorithmList <- c('knn','ctree','glm','svmRadial','rf')
+models <- caretList(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,methodList = algorithmList,trControl=control,metric="Accuracy")
+resultsList <- resamples(models)
+modelCor(resultsList) #Checking correlation between the models.
+algorithmList.2 <- c('knn','ctree','glm','svmRadial') #since Random Forest was highly correlated with other two models, it was removed from the stacked model
+stackControl <- trainControl(method = "repeatedcv", number = 10, repeats = 3, savePredictions = TRUE, classProbs = TRUE)
+models.2 <- caretList(salary ~ Age+education.num+hours.per.week+marital.binary+occupation.binary+sex.male,data = training,methodList = algorithmList.2,trControl=stackControl,metric="Accuracy")
+resultsList.2 <- resamples(models.2)
+
+#ploting correlation matrix of the model list:
+x <- round(cor(modelCor(resultsList)),digits = 2)
+x <- melt(x)
+c1 <- ggplot(data = x,aes(x=Var1,y=Var2,fill=value))+geom_tile()+theme_bw()+geom_text(aes(label=value),color='black',size=15)+labs(title='Model List Correlation Mtrix',x='',y='')+theme(text = element_text(size = 30),legend.position = 'none')+theme(plot.title = element_text(hjust = 0.5))
+c1+scale_fill_distiller(palette = 'YlOrRd')
+
+# greedy AUC optimization of list 2 (w/o random forest). Big improvment
+set.seed(7)
+greedyControl <- trainControl(number = 2,summaryFunction = twoClassSummary,classProbs = TRUE,savePredictions = TRUE)
+greedy_ensemble <- caretEnsemble(models.2,metric='ROC', trControl=greedyControl) # ??
+summary(greedy_ensemble)
+
+set.seed(7)
+stack.glm_greedy <- caretStack(models.2, method = "glm",metric = 'ROC', trControl = greedyControl)
+
+#greedy with accuracy instead of ROC:
+set.seed(7)
+greedyControl <- trainControl(method = 'cv',repeats = 10,number = 2,savePredictions = TRUE)
+
+set.seed(7)
+stack.glm_greedy2 <- caretStack(models.2, method = "glm",metric = 'Accuracy', trControl = greedyControl)
+# plotting AUC of the ensemble model:
+
+stackEnsemble <- data.frame(D=stack.glm_greedy$ens_model$pred$obs,M=1-(stack.glm_greedy$ens_model$pred$X...50K),METHOD='Ensemble')
+stackKnn <- data.frame(D=stack.glm_greedy$models$knn$pred$obs,M=1-(stack.glm_greedy$models$knn$pred$X...50K),METHOD='KNN')
+stackCaret <- data.frame(D=stack.glm_greedy$models$ctree$pred$obs,M=1-(stack.glm_greedy$models$ctree$pred$X...50K),METHOD='CARET')
+stackLogit <- data.frame(D=stack.glm_greedy$models$glm$pred$obs,M=1-(stack.glm_greedy$models$glm$pred$X...50K),METHOD='LOGIT')
+stackSVM <- data.frame(D=stack.glm_greedy$models$svmRadial$pred$obs,M=1-(stack.glm_greedy$models$svmRadial$pred$X...50K),METHOD='SVM')
+StackAllModels <- rbind(stackEnsemble,stackKnn,stackCaret,stackLogit,stackSVM)
+ggplot(data = StackAllModels, aes(m=M,d=D))+geom_roc(aes(color=METHOD))+geom_abline(intercept = 0,slope = 1,linetype="dashed")+ggtitle("AUC Of Linear Ensemble Model Per Method")
+
+
+set.seed(7)
+stack.glm <- caretStack(models.2, method = "glm",metric = metric, trControl = stackControl)
+stack.rf <- caretStack(models.2, method = "rf",metric = metric, trControl = stackControl)
+##Data Frame with all the results:
+
+AllResults <- data.frame(KNN_Stack_Accuracy = max(resultsList.2$values$`knn~Accuracy`),KNN_Stack_Kappa = max(resultsList.2$values$`knn~Kappa`),
+                           KNN_Accuracy = max(results$values$`KNN~Accuracy`),KNN_Kappa = max(results$values$`KNN~Kappa`),
+                           LOGIT_Stack_Accuracy=max(resultsList.2$values$`glm~Accuracy`),
+                           LOGIT_Stack_Kappa = max(resultsList.2$values$`glm~Kappa`),LOGIT_Accuracy = max(results$values$`LOGIT~Accuracy`),
+                           LOGIT_Kappa = max(results$values$`LOGIT~Kappa`),CART_Stack_Accuracy = max(resultsList.2$values$`ctree~Accuracy`),
+                           CART_Stack_Kappa=max(resultsList.2$values$`ctree~Kappa`),CART_Accuracy = max(results$values$`CART~Accuracy`),
+                           CART_Kappa = max(results$values$`CART~Kappa`),SVM_Stack_Accuracy = max(resultsList.2$values$`svmRadial~Accuracy`),
+                           SVM_Stack_Kappa = max(resultsList.2$values$`svmRadial~Kappa`),SVM_Accuracy = max(results$values$`SVM~Accuracy`),
+                           SVM_Kappa = max(results$values$`SVM~Kappa`),RandomForest_Accuracy = max(results$values$`RF~Accuracy`),
+                           RandomForest_Kappa = max(results$values$`RF~Kappa`),ENSEMBLE_LOGIT_Accuracy = max(stack.glm$ens_model$results$Accuracy),
+                           ENSEMBLE_LOGIT_Kappa = max(stack.glm$ens_model$results$Kappa),ENSEMBLE_RandomForest_Accuracy = max(stack.rf$ens_model$results$Accuracy),
+                           ENSEMBLE_RandomForest_Kappa = max(stack.rf$ens_model$results$Kappa))
+
+STACK_Kappa <- c(KNN_Stack_Kappa = max(resultsList.2$values$`knn~Kappa`),
+                 LOGIT_Stack_Kappa = max(resultsList.2$values$`glm~Kappa`), 
+                 CART_Stack_Kappa=max(resultsList.2$values$`ctree~Kappa`), 
+                 SVM_Stack_Kappa = max(resultsList.2$values$`svmRadial~Kappa`))
+
+Kappa <- c(KNN_Kappa = max(results$values$`KNN~Kappa`),
+           LOGIT_Kappa = max(results$values$`LOGIT~Kappa`),
+           CART_Kappa = max(results$values$`CART~Kappa`), 
+           SVM_Kappa = max(results$values$`SVM~Kappa`))
+KaapaAll <- data.frame(Kappa_Stacked = STACK_Kappa,Kappa_Single = Kappa,Method = c('KKN','LOGIT','CART','SVM'))
+KaapaAll.stack <- stack(KaapaAll)
+KaapaAll.stack <- data.frame(KaapaAll.stack,Method = c('KKN','LOGIT','CART','SVM','KKN','LOGIT','CART','SVM'))
+colnames(KaapaAll.stack) <- c('Values','Stacked / Single Model','Method','Method.1')
+
+#Plotting comparison of Kappa results per method, stacked vs unstacked:
+ggplot(KaapaAll.stack,aes(x=Method,y=Values))+geom_bar(aes(fill=`Stacked / Single Model`),stat = "identity", position = position_dodge())+scale_y_continuous(limits = c(0,1))+scale_fill_manual(values = c('#4C5B5C','#FF715B'))+theme(axis.text.x = element_text(size=16))+theme(legend.title = element_text(size=18))+guides(fill=guide_legend(keywidth=0.3,keyheight=0.3, default.unit="inch"))+theme(legend.text = element_text(size = 12))
+
